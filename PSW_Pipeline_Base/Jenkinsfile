@@ -23,10 +23,8 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Checkout') {
             steps {
-                echo '>>> [1/5] Obteniendo código fuente...'
+                echo '>>> [1/5] Obteniendo codigo fuente...'
                 checkout scm
-                echo "Rama: ${env.GIT_BRANCH ?: 'local'}"
-                echo "Commit: ${env.GIT_COMMIT ?: 'N/A'}"
             }
         }
 
@@ -49,7 +47,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // ETAPA 3: Tests unitarios + cobertura JaCoCo
+        // ETAPA 3: Tests + cobertura JaCoCo
         // ─────────────────────────────────────────────
         stage('Test') {
             steps {
@@ -72,23 +70,14 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // ETAPA 4: Análisis SonarQube
+        // ETAPA 4: Analisis SonarQube
         // ─────────────────────────────────────────────
         stage('SonarQube Analysis') {
             steps {
-                echo '>>> [3/5] Analizando calidad de código con SonarQube...'
+                echo '>>> [3/5] Analizando calidad de codigo con SonarQube...'
                 withSonarQubeEnv('SonarQube') {
                     dir('PSW_Pipeline_Base') {
-                        bat """
-                            mvn sonar:sonar ^
-                              -Dsonar.projectKey=${SONAR_PROJECT} ^
-                              -Dsonar.projectName="${APP_NAME}" ^
-                              -Dsonar.host.url=${SONAR_HOST} ^
-                              -Dsonar.java.coveragePlugin=jacoco ^
-                              -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml ^
-                              -Dsonar.sources=src/main/java ^
-                              -Dsonar.java.binaries=target/classes
-                        """
+                        bat "mvn sonar:sonar -Dsonar.projectKey=psw-pipeline-base -Dsonar.projectName=psw-pipeline-base -Dsonar.host.url=http://localhost:9000 -Dsonar.sources=src/main/java -Dsonar.java.binaries=target/classes -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml"
                     }
                 }
             }
@@ -113,15 +102,8 @@ pipeline {
             steps {
                 echo '>>> [4/5] Ejecutando pruebas de carga con JMeter...'
                 dir('PSW_Pipeline_Base') {
-                    bat """
-                        if not exist target\\jmeter\\results mkdir target\\jmeter\\results
-                        ${JMETER_HOME}\\bin\\jmeter.bat ^
-                          -n ^
-                          -t ${JMETER_PLAN} ^
-                          -l ${JMETER_RESULTS}\\results.jtl ^
-                          -e ^
-                          -o ${JMETER_RESULTS}\\html-report
-                    """
+                    bat 'if not exist target\\jmeter\\results mkdir target\\jmeter\\results'
+                    bat 'C:/apache-jmeter/bin/jmeter.bat -n -t src/test/jmeter/pipeline_load_test.jmx -l target/jmeter/results/results.jtl -e -o target/jmeter/results/html-report'
                 }
             }
             post {
@@ -152,48 +134,41 @@ pipeline {
     post {
 
         success {
-            echo '>>> [5/5] Pipeline finalizado correctamente. Notificando a Slack...'
-            slackSend(
-                channel: "${SLACK_CHANNEL}",
-                color  : 'good',
-                message: """:white_check_mark: *PIPELINE EXITOSO* — `${APP_NAME}`
-*Proyecto:* PSW Pipeline Base
-*Rama:* ${env.GIT_BRANCH ?: 'local'}
-*Build:* #${env.BUILD_NUMBER}
-*Duración:* ${currentBuild.durationString}
-*Estado:* ${currentBuild.currentResult}
-:link: <${env.BUILD_URL}|Ver detalle en Jenkins>"""
-            )
+            script {
+                echo '>>> [5/5] Pipeline finalizado correctamente. Notificando a Slack...'
+                slackSend(
+                    channel: '#pipeline-notificaciones',
+                    color  : 'good',
+                    message: ":white_check_mark: *PIPELINE EXITOSO* - `psw-pipeline-base`\n*Build:* #${env.BUILD_NUMBER}\n*Duracion:* ${currentBuild.durationString}\n*Estado:* ${currentBuild.currentResult}\n<${env.BUILD_URL}|Ver en Jenkins>"
+                )
+            }
         }
 
         failure {
-            echo '>>> [5/5] Pipeline FALLÓ. Notificando a Slack...'
-            slackSend(
-                channel: "${SLACK_CHANNEL}",
-                color  : 'danger',
-                message: """:x: *PIPELINE FALLIDO* — `${APP_NAME}`
-*Proyecto:* PSW Pipeline Base
-*Rama:* ${env.GIT_BRANCH ?: 'local'}
-*Build:* #${env.BUILD_NUMBER}
-*Duración:* ${currentBuild.durationString}
-*Etapa fallida:* ${env.STAGE_NAME ?: 'Desconocida'}
-:link: <${env.BUILD_URL}|Ver detalle en Jenkins>"""
-            )
+            script {
+                echo '>>> [5/5] Pipeline FALLO. Notificando a Slack...'
+                slackSend(
+                    channel: '#pipeline-notificaciones',
+                    color  : 'danger',
+                    message: ":x: *PIPELINE FALLIDO* - `psw-pipeline-base`\n*Build:* #${env.BUILD_NUMBER}\n*Duracion:* ${currentBuild.durationString}\n<${env.BUILD_URL}|Ver en Jenkins>"
+                )
+            }
         }
 
         unstable {
-            slackSend(
-                channel: "${SLACK_CHANNEL}",
-                color  : 'warning',
-                message: """:warning: *PIPELINE INESTABLE* — `${APP_NAME}`
-*Build:* #${env.BUILD_NUMBER} | *Rama:* ${env.GIT_BRANCH ?: 'local'}
-El Quality Gate o las pruebas de carga presentaron advertencias.
-:link: <${env.BUILD_URL}|Ver detalle en Jenkins>"""
-            )
+            script {
+                slackSend(
+                    channel: '#pipeline-notificaciones',
+                    color  : 'warning',
+                    message: ":warning: *PIPELINE INESTABLE* - `psw-pipeline-base`\n*Build:* #${env.BUILD_NUMBER}\n<${env.BUILD_URL}|Ver en Jenkins>"
+                )
+            }
         }
 
         always {
-            echo 'Limpiando workspace...'
+            script {
+                echo 'Limpiando workspace...'
+            }
             cleanWs()
         }
     }
