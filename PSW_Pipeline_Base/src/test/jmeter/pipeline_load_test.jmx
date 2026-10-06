@@ -317,12 +317,12 @@
           <hashTree/>
 
           <!-- Extractor: token de la respuesta -->
-          <JSONPathExtractor guiclass="JSONPathExtractorGui" testclass="JSONPathExtractor"
+          <com.atlantbh.jmeter.plugins.jsonutils.jsonpathextractor.JSONPathExtractor guiclass="com.atlantbh.jmeter.plugins.jsonutils.jsonpathextractor.gui.JSONPathExtractorGui" testclass="com.atlantbh.jmeter.plugins.jsonutils.jsonpathextractor.JSONPathExtractor"
                              testname="Extraer Token" enabled="true">
-            <stringProp name="JSONPathExtractor.referenceName">token</stringProp>
-            <stringProp name="JSONPathExtractor.jsonPathExpr">$.token</stringProp>
-            <stringProp name="JSONPathExtractor.defaultValue">NO_TOKEN</stringProp>
-          </JSONPathExtractor>
+            <stringProp name="VAR">token</stringProp>
+            <stringProp name="JSONPATH">$.token</stringProp>
+            <stringProp name="DEFAULT">NO_TOKEN</stringProp>
+          </com.atlantbh.jmeter.plugins.jsonutils.jsonpathextractor.JSONPathExtractor>
           <hashTree/>
 
         </hashTree>
