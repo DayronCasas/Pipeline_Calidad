@@ -1,0 +1,200 @@
+pipeline {
+    agent any
+
+    tools {
+        maven 'Maven'
+        jdk 'JDK21'
+    }
+
+    environment {
+        APP_NAME        = 'psw-pipeline-base'
+        SONAR_PROJECT   = 'psw-pipeline-base'
+        SONAR_HOST      = 'http://localhost:9000'
+        JMETER_HOME     = 'C:/apache-jmeter'
+        JMETER_PLAN     = 'src/test/jmeter/pipeline_load_test.jmx'
+        JMETER_RESULTS  = 'target/jmeter/results'
+        SLACK_CHANNEL   = '#pipeline-notificaciones'
+    }
+
+    stages {
+
+        // ─────────────────────────────────────────────
+        // ETAPA 1: Checkout
+        // ─────────────────────────────────────────────
+        stage('Checkout') {
+            steps {
+                echo '>>> [1/5] Obteniendo código fuente...'
+                checkout scm
+                echo "Rama: ${env.GIT_BRANCH ?: 'local'}"
+                echo "Commit: ${env.GIT_COMMIT ?: 'N/A'}"
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // ETAPA 2: Build
+        // ─────────────────────────────────────────────
+        stage('Build') {
+            steps {
+                echo '>>> [2/5] Compilando el proyecto...'
+                dir('PSW_Pipeline_Base') {
+                    bat 'mvn clean package -DskipTests'
+                }
+                echo 'Build completado correctamente.'
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: 'PSW_Pipeline_Base/target/*.jar', fingerprint: true
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // ETAPA 3: Tests unitarios + cobertura JaCoCo
+        // ─────────────────────────────────────────────
+        stage('Test') {
+            steps {
+                echo '>>> [2.5/5] Ejecutando tests y generando reporte JaCoCo...'
+                dir('PSW_Pipeline_Base') {
+                    bat 'mvn test'
+                }
+            }
+            post {
+                always {
+                    junit testResults: 'PSW_Pipeline_Base/target/surefire-reports/*.xml',
+                          allowEmptyResults: true
+                    jacoco(
+                        execPattern: 'PSW_Pipeline_Base/target/jacoco.exec',
+                        classPattern: 'PSW_Pipeline_Base/target/classes',
+                        sourcePattern: 'PSW_Pipeline_Base/src/main/java'
+                    )
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // ETAPA 4: Análisis SonarQube
+        // ─────────────────────────────────────────────
+        stage('SonarQube Analysis') {
+            steps {
+                echo '>>> [3/5] Analizando calidad de código con SonarQube...'
+                withSonarQubeEnv('SonarQube') {
+                    dir('PSW_Pipeline_Base') {
+                        bat """
+                            mvn sonar:sonar ^
+                              -Dsonar.projectKey=${SONAR_PROJECT} ^
+                              -Dsonar.projectName="${APP_NAME}" ^
+                              -Dsonar.host.url=${SONAR_HOST} ^
+                              -Dsonar.java.coveragePlugin=jacoco ^
+                              -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml ^
+                              -Dsonar.sources=src/main/java ^
+                              -Dsonar.java.binaries=target/classes
+                        """
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // ETAPA 5: Quality Gate
+        // ─────────────────────────────────────────────
+        stage('Quality Gate') {
+            steps {
+                echo '>>> Esperando resultado del Quality Gate de SonarQube...'
+                timeout(time: 3, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // ETAPA 6: Pruebas de carga con JMeter
+        // ─────────────────────────────────────────────
+        stage('JMeter Load Test') {
+            steps {
+                echo '>>> [4/5] Ejecutando pruebas de carga con JMeter...'
+                dir('PSW_Pipeline_Base') {
+                    bat """
+                        if not exist target\\jmeter\\results mkdir target\\jmeter\\results
+                        ${JMETER_HOME}\\bin\\jmeter.bat ^
+                          -n ^
+                          -t ${JMETER_PLAN} ^
+                          -l ${JMETER_RESULTS}\\results.jtl ^
+                          -e ^
+                          -o ${JMETER_RESULTS}\\html-report
+                    """
+                }
+            }
+            post {
+                always {
+                    perfReport(
+                        sourceDataFiles: 'PSW_Pipeline_Base/target/jmeter/results/results.jtl',
+                        errorFailedThreshold: 10,
+                        errorUnstableThreshold: 5,
+                        relativeFailedThresholdPositive: 50,
+                        relativeUnstableThresholdPositive: 30
+                    )
+                    publishHTML(target: [
+                        reportName : 'JMeter HTML Report',
+                        reportDir  : 'PSW_Pipeline_Base/target/jmeter/results/html-report',
+                        reportFiles: 'index.html',
+                        keepAll    : true,
+                        alwaysLinkToLastBuild: true
+                    ])
+                }
+            }
+        }
+
+    } // end stages
+
+    // ─────────────────────────────────────────────────
+    // POST: Notificaciones Slack
+    // ─────────────────────────────────────────────────
+    post {
+
+        success {
+            echo '>>> [5/5] Pipeline finalizado correctamente. Notificando a Slack...'
+            slackSend(
+                channel: "${SLACK_CHANNEL}",
+                color  : 'good',
+                message: """:white_check_mark: *PIPELINE EXITOSO* — `${APP_NAME}`
+*Proyecto:* PSW Pipeline Base
+*Rama:* ${env.GIT_BRANCH ?: 'local'}
+*Build:* #${env.BUILD_NUMBER}
+*Duración:* ${currentBuild.durationString}
+*Estado:* ${currentBuild.currentResult}
+:link: <${env.BUILD_URL}|Ver detalle en Jenkins>"""
+            )
+        }
+
+        failure {
+            echo '>>> [5/5] Pipeline FALLÓ. Notificando a Slack...'
+            slackSend(
+                channel: "${SLACK_CHANNEL}",
+                color  : 'danger',
+                message: """:x: *PIPELINE FALLIDO* — `${APP_NAME}`
+*Proyecto:* PSW Pipeline Base
+*Rama:* ${env.GIT_BRANCH ?: 'local'}
+*Build:* #${env.BUILD_NUMBER}
+*Duración:* ${currentBuild.durationString}
+*Etapa fallida:* ${env.STAGE_NAME ?: 'Desconocida'}
+:link: <${env.BUILD_URL}|Ver detalle en Jenkins>"""
+            )
+        }
+
+        unstable {
+            slackSend(
+                channel: "${SLACK_CHANNEL}",
+                color  : 'warning',
+                message: """:warning: *PIPELINE INESTABLE* — `${APP_NAME}`
+*Build:* #${env.BUILD_NUMBER} | *Rama:* ${env.GIT_BRANCH ?: 'local'}
+El Quality Gate o las pruebas de carga presentaron advertencias.
+:link: <${env.BUILD_URL}|Ver detalle en Jenkins>"""
+            )
+        }
+
+        always {
+            echo 'Limpiando workspace...'
+            cleanWs()
+        }
+    }
+}
